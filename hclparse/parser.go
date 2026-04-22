@@ -4,11 +4,10 @@
 // Package hclparse has the main API entry point for parsing both HCL native
 // syntax and HCL JSON.
 //
-// The main HCL package also includes SimpleParse and SimpleParseFile which
-// can be a simpler interface for the common case where an application just
-// needs to parse a single file. The gohcl package simplifies that further
-// in its SimpleDecode function, which combines hcl.SimpleParse with decoding
-// into Go struct values
+// The hclsimple package provides a simpler interface for the common case
+// where an application just needs to parse and decode a single file directly
+// into a Go struct value. Its [hclsimple.Decode] and [hclsimple.DecodeFile]
+// functions combine parsing and decoding into a single step.
 //
 // Package hclparse, then, is useful for applications that require more fine
 // control over parsing or which need to load many separate files and keep
