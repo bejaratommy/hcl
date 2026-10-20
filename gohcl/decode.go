@@ -70,9 +70,9 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 	tags := getFieldTags(val.Type())
 
 	if tags.Body != nil {
-		fieldIdx := *tags.Body
-		field := val.Type().Field(fieldIdx)
-		fieldV := val.Field(fieldIdx)
+		fieldIdx := tags.Body
+		field := typeByIndex(val.Type(), fieldIdx)
+		fieldV := valueByIndex(val, fieldIdx, true)
 		switch {
 		case bodyType.AssignableTo(field.Type):
 			fieldV.Set(reflect.ValueOf(body))
@@ -83,9 +83,9 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 	}
 
 	if tags.Remain != nil {
-		fieldIdx := *tags.Remain
-		field := val.Type().Field(fieldIdx)
-		fieldV := val.Field(fieldIdx)
+		fieldIdx := tags.Remain
+		field := typeByIndex(val.Type(), fieldIdx)
+		fieldV := valueByIndex(val, fieldIdx, true)
 		switch {
 		case bodyType.AssignableTo(field.Type):
 			fieldV.Set(reflect.ValueOf(leftovers))
@@ -102,8 +102,8 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 
 	for name, fieldIdx := range tags.Attributes {
 		attr := content.Attributes[name]
-		field := val.Type().Field(fieldIdx)
-		fieldV := val.Field(fieldIdx)
+		field := typeByIndex(val.Type(), fieldIdx)
+		fieldV := valueByIndex(val, fieldIdx, true)
 
 		if attr == nil {
 			if !exprType.AssignableTo(field.Type) {
@@ -120,15 +120,15 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 		}
 
 		if attrRange, exists := tags.AttributeRange[name]; exists {
-			val.Field(attrRange).Set(reflect.ValueOf(attr.Range))
+			valueByIndex(val, attrRange, true).Set(reflect.ValueOf(attr.Range))
 		}
 
 		if attrNameRange, exists := tags.AttributeNameRange[name]; exists {
-			val.Field(attrNameRange).Set(reflect.ValueOf(attr.NameRange))
+			valueByIndex(val, attrNameRange, true).Set(reflect.ValueOf(attr.NameRange))
 		}
 
 		if attrValueRange, exists := tags.AttributeValueRange[name]; exists {
-			val.Field(attrValueRange).Set(reflect.ValueOf(attr.Expr.Range()))
+			valueByIndex(val, attrValueRange, true).Set(reflect.ValueOf(attr.Expr.Range()))
 		}
 
 		switch {
@@ -147,7 +147,7 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 
 	for typeName, fieldIdx := range tags.Blocks {
 		blocks := blocksByType[typeName]
-		field := val.Type().Field(fieldIdx)
+		field := typeByIndex(val.Type(), fieldIdx)
 
 		ty := field.Type
 		isSlice := false
@@ -176,8 +176,9 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 
 		if len(blocks) == 0 {
 			if isSlice || isPtr {
-				if val.Field(fieldIdx).IsNil() {
-					val.Field(fieldIdx).Set(reflect.Zero(field.Type))
+				fv := valueByIndex(val, fieldIdx, true)
+				if fv.IsNil() {
+					fv.Set(reflect.Zero(field.Type))
 				}
 			} else {
 				diags = append(diags, &hcl.Diagnostic{
@@ -197,7 +198,7 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 			if isPtr {
 				elemType = reflect.PointerTo(ty)
 			}
-			sli := val.Field(fieldIdx)
+			sli := valueByIndex(val, fieldIdx, true)
 			if sli.IsNil() {
 				sli = reflect.MakeSlice(reflect.SliceOf(elemType), len(blocks), len(blocks))
 			}
@@ -225,19 +226,19 @@ func decodeBodyToStruct(body hcl.Body, ctx *hcl.EvalContext, val reflect.Value) 
 				sli.SetLen(len(blocks))
 			}
 
-			val.Field(fieldIdx).Set(sli)
+			valueByIndex(val, fieldIdx, true).Set(sli)
 
 		default:
 			block := blocks[0]
 			if isPtr {
-				v := val.Field(fieldIdx)
+				v := valueByIndex(val, fieldIdx, true)
 				if v.IsNil() {
 					v = reflect.New(ty)
 				}
 				diags = append(diags, decodeBlockToValue(block, ctx, v.Elem())...)
-				val.Field(fieldIdx).Set(v)
+				valueByIndex(val, fieldIdx, true).Set(v)
 			} else {
-				diags = append(diags, decodeBlockToValue(block, ctx, val.Field(fieldIdx))...)
+				diags = append(diags, decodeBlockToValue(block, ctx, valueByIndex(val, fieldIdx, true))...)
 			}
 
 		}
@@ -281,19 +282,19 @@ func decodeBlockToValue(block *hcl.Block, ctx *hcl.EvalContext, v reflect.Value)
 		lfieldIdx := blockTags.Labels[li].FieldIndex
 		lfieldName := blockTags.Labels[li].Name
 
-		v.Field(lfieldIdx).Set(reflect.ValueOf(lv))
+		valueByIndex(v, lfieldIdx, true).Set(reflect.ValueOf(lv))
 
 		if ix, exists := blockTags.LabelRange[lfieldName]; exists {
-			v.Field(ix).Set(reflect.ValueOf(block.LabelRanges[li]))
+			valueByIndex(v, ix, true).Set(reflect.ValueOf(block.LabelRanges[li]))
 		}
 	}
 
 	if blockTags.TypeRange != nil {
-		v.Field(*blockTags.TypeRange).Set(reflect.ValueOf(block.TypeRange))
+		valueByIndex(v, blockTags.TypeRange, true).Set(reflect.ValueOf(block.TypeRange))
 	}
 
 	if blockTags.DefRange != nil {
-		v.Field(*blockTags.DefRange).Set(reflect.ValueOf(block.DefRange))
+		valueByIndex(v, blockTags.DefRange, true).Set(reflect.ValueOf(block.DefRange))
 	}
 
 	return diags

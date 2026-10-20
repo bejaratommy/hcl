@@ -53,6 +53,13 @@
 // present then any attributes or blocks not matched by another valid tag
 // will cause an error diagnostic.
 //
+// Exported embedded structs with no hcl tag of their own are promoted:
+// their tagged fields are decoded and encoded as if they were declared on
+// the outer struct. An embedded field that itself has an hcl tag is not
+// promoted. If an outer field and a promoted field share a name, the
+// shallower field is used. A pointer to an embedded struct is allocated
+// when a promoted field is decoded.
+//
 // "def_range" can be placed on a single field that must be of type hcl.Range.
 // This field is only considered in a struct used as the type of a field marked
 // as "block", and is used to capture the range of the block's definition.

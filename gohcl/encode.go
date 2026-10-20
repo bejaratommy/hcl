@@ -74,7 +74,10 @@ func EncodeAsBlock(val interface{}, blockType string) *hclwrite.Block {
 	tags := getFieldTags(ty)
 	labels := make([]string, len(tags.Labels))
 	for i, lf := range tags.Labels {
-		lv := rv.Field(lf.FieldIndex)
+		lv := valueByIndex(rv, lf.FieldIndex, false)
+		if !lv.IsValid() {
+			continue
+		}
 		// We just stringify whatever we find. It should always be a string
 		// but if not then we'll still do something reasonable.
 		labels[i] = fmt.Sprintf("%s", lv.Interface())
@@ -86,7 +89,7 @@ func EncodeAsBlock(val interface{}, blockType string) *hclwrite.Block {
 }
 
 func populateBody(rv reflect.Value, ty reflect.Type, tags *fieldTags, dst *hclwrite.Body) {
-	nameIdxs := make(map[string]int, len(tags.Attributes)+len(tags.Blocks))
+	nameIdxs := make(map[string][]int, len(tags.Attributes)+len(tags.Blocks))
 	namesOrder := make([]string, 0, len(tags.Attributes)+len(tags.Blocks))
 	for n, i := range tags.Attributes {
 		nameIdxs[n] = i
@@ -98,7 +101,7 @@ func populateBody(rv reflect.Value, ty reflect.Type, tags *fieldTags, dst *hclwr
 	}
 	sort.SliceStable(namesOrder, func(i, j int) bool {
 		ni, nj := namesOrder[i], namesOrder[j]
-		return nameIdxs[ni] < nameIdxs[nj]
+		return indexLess(nameIdxs[ni], nameIdxs[nj])
 	})
 
 	dst.Clear()
@@ -106,9 +109,12 @@ func populateBody(rv reflect.Value, ty reflect.Type, tags *fieldTags, dst *hclwr
 	prevWasBlock := false
 	for _, name := range namesOrder {
 		fieldIdx := nameIdxs[name]
-		field := ty.Field(fieldIdx)
+		field := typeByIndex(ty, fieldIdx)
 		fieldTy := field.Type
-		fieldVal := rv.Field(fieldIdx)
+		fieldVal := valueByIndex(rv, fieldIdx, false)
+		if !fieldVal.IsValid() {
+			continue
+		}
 
 		if fieldTy.Kind() == reflect.Ptr {
 			fieldTy = fieldTy.Elem()
