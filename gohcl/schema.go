@@ -46,7 +46,7 @@ func ImpliedBodySchema(val interface{}) (schema *hcl.BodySchema, partial bool) {
 	for _, n := range attrNames {
 		idx := tags.Attributes[n]
 		optional := tags.Optional[n]
-		field := ty.Field(idx)
+		field := typeByIndex(ty, idx)
 
 		var required bool
 
@@ -75,7 +75,7 @@ func ImpliedBodySchema(val interface{}) (schema *hcl.BodySchema, partial bool) {
 	sort.Strings(blockNames)
 	for _, n := range blockNames {
 		idx := tags.Blocks[n]
-		field := ty.Field(idx)
+		field := typeByIndex(ty, idx)
 		fty := field.Type
 		if fty.Kind() == reflect.Slice {
 			fty = fty.Elem()
@@ -112,44 +112,71 @@ func ImpliedBodySchema(val interface{}) (schema *hcl.BodySchema, partial bool) {
 }
 
 type fieldTags struct {
-	Attributes map[string]int
-	Blocks     map[string]int
+	Attributes map[string][]int
+	Blocks     map[string][]int
 	Labels     []labelField
-	Remain     *int
-	Body       *int
+	Remain     []int
+	Body       []int
 	Optional   map[string]bool
 
-	AttributeRange      map[string]int
-	AttributeNameRange  map[string]int
-	AttributeValueRange map[string]int
+	AttributeRange      map[string][]int
+	AttributeNameRange  map[string][]int
+	AttributeValueRange map[string][]int
 
-	DefRange   *int
-	TypeRange  *int
-	LabelRange map[string]int
+	DefRange   []int
+	TypeRange  []int
+	LabelRange map[string][]int
 }
 
 type labelField struct {
-	FieldIndex int
-	RangeIndex int
+	FieldIndex []int
 	Name       string
 }
 
 func getFieldTags(ty reflect.Type) *fieldTags {
 	ret := &fieldTags{
-		Attributes:          map[string]int{},
-		Blocks:              map[string]int{},
+		Attributes:          map[string][]int{},
+		Blocks:              map[string][]int{},
 		Optional:            map[string]bool{},
-		AttributeRange:      map[string]int{},
-		AttributeNameRange:  map[string]int{},
-		AttributeValueRange: map[string]int{},
-		LabelRange:          map[string]int{},
+		AttributeRange:      map[string][]int{},
+		AttributeNameRange:  map[string][]int{},
+		AttributeValueRange: map[string][]int{},
+		LabelRange:          map[string][]int{},
 	}
+	walkFieldTags(ret, ty, nil, map[reflect.Type]struct{}{})
+	return ret
+}
 
-	ct := ty.NumField()
-	for i := 0; i < ct; i++ {
+// walkFieldTags records hcl tags on ty. Exported embedded structs with no
+// hcl tag of their own contribute their fields, matching encoding/json.
+// A shallower field wins when two fields share a name.
+func walkFieldTags(ret *fieldTags, ty reflect.Type, prefix []int, seen map[reflect.Type]struct{}) {
+	if ty.Kind() == reflect.Pointer {
+		ty = ty.Elem()
+	}
+	if ty.Kind() != reflect.Struct {
+		return
+	}
+	if _, ok := seen[ty]; ok {
+		return
+	}
+	seen[ty] = struct{}{}
+	defer delete(seen, ty)
+
+	for i := 0; i < ty.NumField(); i++ {
 		field := ty.Field(i)
+		idx := append(append([]int{}, prefix...), i)
 		tag := field.Tag.Get("hcl")
 		if tag == "" {
+			if field.Anonymous && field.IsExported() {
+				embedTy := field.Type
+				if embedTy.Kind() == reflect.Pointer {
+					embedTy = embedTy.Elem()
+				}
+				if embedTy.Kind() == reflect.Struct {
+					walkFieldTags(ret, embedTy, idx, seen)
+				}
+			}
 			continue
 		}
 
@@ -165,53 +192,145 @@ func getFieldTags(ty reflect.Type) *fieldTags {
 
 		switch kind {
 		case "attr":
-			ret.Attributes[name] = i
+			ret.setNamed(ret.Attributes, name, idx)
 		case "block":
-			ret.Blocks[name] = i
+			ret.setNamed(ret.Blocks, name, idx)
 		case "label":
-			ret.Labels = append(ret.Labels, labelField{
-				FieldIndex: i,
-				Name:       name,
-			})
+			replaced := false
+			for li := range ret.Labels {
+				if ret.Labels[li].Name != name {
+					continue
+				}
+				replaced = true
+				if shallower(idx, ret.Labels[li].FieldIndex) {
+					ret.Labels[li].FieldIndex = idx
+				}
+			}
+			if !replaced {
+				ret.Labels = append(ret.Labels, labelField{FieldIndex: idx, Name: name})
+			}
 		case "remain":
-			if ret.Remain != nil {
+			if ret.Remain != nil && !shallower(idx, ret.Remain) {
+				if len(idx) == len(ret.Remain) {
+					panic("only one 'remain' tag is permitted")
+				}
+				break
+			}
+			if ret.Remain != nil && len(idx) == len(ret.Remain) {
 				panic("only one 'remain' tag is permitted")
 			}
-			idx := i // copy, because this loop will continue assigning to i
-			ret.Remain = &idx
+			ret.Remain = idx
 		case "body":
-			if ret.Body != nil {
-				panic("only one 'body' tag is permitted")
+			if ret.Body != nil && len(idx) >= len(ret.Body) {
+				if len(idx) == len(ret.Body) {
+					panic("only one 'body' tag is permitted")
+				}
+				break
 			}
-			idx := i // copy, because this loop will continue assigning to i
-			ret.Body = &idx
+			ret.Body = idx
 		case "optional":
-			ret.Attributes[name] = i
-			ret.Optional[name] = true
+			ret.setNamed(ret.Attributes, name, idx)
+			if _, kept := ret.Attributes[name]; kept && indexEqual(ret.Attributes[name], idx) {
+				ret.Optional[name] = true
+			}
 		case "def_range":
-			if ret.DefRange != nil {
-				panic("only one 'def_range' tag is permitted")
-			}
-			idx := i // copy, because this loop will continue assigning to i
-			ret.DefRange = &idx
+			ret.setSingle(&ret.DefRange, idx, "def_range")
 		case "type_range":
-			if ret.TypeRange != nil {
-				panic("only one 'type_range' tag is permitted")
-			}
-			idx := i // copy, because this loop will continue assigning to i
-			ret.TypeRange = &idx
+			ret.setSingle(&ret.TypeRange, idx, "type_range")
 		case "label_range":
-			ret.LabelRange[name] = i
+			ret.setNamed(ret.LabelRange, name, idx)
 		case "attr_range":
-			ret.AttributeRange[name] = i
+			ret.setNamed(ret.AttributeRange, name, idx)
 		case "attr_name_range":
-			ret.AttributeNameRange[name] = i
+			ret.setNamed(ret.AttributeNameRange, name, idx)
 		case "attr_value_range":
-			ret.AttributeValueRange[name] = i
+			ret.setNamed(ret.AttributeValueRange, name, idx)
 		default:
 			panic(fmt.Sprintf("invalid hcl field tag kind %q on %s %q", kind, field.Type.String(), field.Name))
 		}
 	}
+}
 
-	return ret
+// setNamed keeps the shallower of two fields that share a name.
+func (ret *fieldTags) setNamed(dst map[string][]int, name string, idx []int) {
+	if prev, ok := dst[name]; ok && !shallower(idx, prev) {
+		return
+	}
+	dst[name] = idx
+}
+
+func (ret *fieldTags) setSingle(dst *[]int, idx []int, kind string) {
+	if *dst != nil && !shallower(idx, *dst) {
+		if len(idx) == len(*dst) {
+			panic(fmt.Sprintf("only one %q tag is permitted", kind))
+		}
+		return
+	}
+	if *dst != nil && len(idx) == len(*dst) {
+		panic(fmt.Sprintf("only one %q tag is permitted", kind))
+	}
+	*dst = idx
+}
+
+func shallower(next, prev []int) bool {
+	return len(next) < len(prev)
+}
+
+func indexEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func indexLess(a, b []int) bool {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return len(a) < len(b)
+}
+
+func typeByIndex(ty reflect.Type, index []int) reflect.StructField {
+	var field reflect.StructField
+	for n, i := range index {
+		if ty.Kind() == reflect.Pointer {
+			ty = ty.Elem()
+		}
+		field = ty.Field(i)
+		if n < len(index)-1 {
+			ty = field.Type
+		}
+	}
+	return field
+}
+
+// valueByIndex walks index. Nil pointer embedded structs are allocated when
+// allocNil is set so a decoded value can be stored. The field itself is not
+// allocated when it is a pointer. An invalid Value means a nil embedded
+// pointer was left unset.
+func valueByIndex(v reflect.Value, index []int, allocNil bool) reflect.Value {
+	for _, i := range index {
+		if v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				if !allocNil || !v.CanSet() {
+					return reflect.Value{}
+				}
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			v = v.Elem()
+		}
+		v = v.Field(i)
+	}
+	return v
 }

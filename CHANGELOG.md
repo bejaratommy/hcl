@@ -1,5 +1,11 @@
 # HCL Changelog
 
+## Unreleased
+
+### Bugs Fixed
+
+* gohcl: Decode and encode fields of embedded structs that have no `hcl` tag of their own. ([#583](https://github.com/hashicorp/hcl/issues/583))
+
 ## v2.24.0 (July 7, 2025)
 
 ### Enhancements
